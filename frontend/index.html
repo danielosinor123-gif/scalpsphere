@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#070b0a">
+<meta name="robots" content="noindex, nofollow">
+<title>ScalpSphere Admin</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="shell">
+  <header class="topbar">
+    <button class="iconbtn" id="menu" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">☰</button>
+    <a class="topbar__brand" href="#/dashboard" aria-label="ScalpSphere admin home">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span>Scalp<span style="color:var(--accent)">Sphere</span></span>
+      <small style="font-size:10px;color:var(--dim);font-weight:500">ADMIN</small>
+    </a>
+    <div class="topbar__crumb" id="crumb" aria-hidden="true"></div>
+    <div class="topbar__side">
+      <span class="health" id="health" hidden title="Backend health">
+        <span class="health__dot"></span><span id="health-text">API online</span>
+      </span>
+      <span class="role-badge" id="role" hidden></span>
+      <span class="avatar" id="avatar" aria-hidden="true"></span>
+      <button class="btn btn--sm" id="logout" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="sidebar" id="sidebar" aria-label="Admin sections">
+    <!-- built by app.js: one button per section, aria-current on the active one -->
+  </nav>
+
+  <div class="backdrop" id="backdrop" hidden></div>
+
+  <main class="content" id="main" tabindex="-1"></main>
+</div>
+
+<script src="assets/config.js"></script>
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

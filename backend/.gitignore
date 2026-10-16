@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Environment — never commit real secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# Test / coverage output
+coverage/
+.nyc_output/
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Backups and local MySQL dumps produced by tooling
+*.sql.bak
+backups/*.sql
+!backups/.gitkeep

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#070b0a">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in — ScalpSphere Admin</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<main class="login">
+  <section class="login__card" aria-labelledby="login-title">
+    <div class="login__brand">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <h1 id="login-title">Scalp<span style="color:var(--accent)">Sphere</span> Admin</h1>
+    </div>
+    <p class="login__sub">Operator sign-in. Sessions are httpOnly cookies; nothing is stored in this browser's storage.</p>
+
+    <!-- API error / validation summary, populated by login.js -->
+    <div class="login__err" id="err" role="alert" aria-live="assertive"></div>
+
+    <form id="form" novalidate>
+      <div class="field" id="f-email">
+        <label for="email">Email</label>
+        <input class="input" type="email" id="email" name="email" autocomplete="username"
+               inputmode="email" required aria-describedby="f-email-hint">
+        <p class="field__hint" id="f-email-hint">The administrator email provisioned for you.</p>
+      </div>
+
+      <div class="field" id="f-password">
+        <label for="password">Password</label>
+        <input class="input" type="password" id="password" name="password"
+               autocomplete="current-password" required>
+      </div>
+
+      <button class="btn btn--primary" type="submit" id="submit" style="width:100%">
+        Sign in
+      </button>
+    </form>
+
+    <p class="login__foot">Authorised operators only. All sign-in attempts are rate-limited and audited.</p>
+    <p class="login__health" id="health" hidden><span class="health__dot"></span><span id="health-text"></span></p>
+  </section>
+</main>
+
+<script src="assets/config.js"></script>
+<script src="assets/api.js"></script>
+<script src="assets/login.js"></script>
+</body>
+</html>

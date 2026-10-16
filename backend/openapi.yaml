@@ -1,0 +1,1528 @@
+openapi: 3.0.3
+info:
+  title: ScalpSphere Admin API
+  version: 1.0.0
+  description: |
+    Backend REST API for the ScalpSphere admin dashboard.
+
+    **Demo data notice.** Every seeded record and every aggregate returned by this
+    API is synthetic demonstration content. Records carry `is_demo: true` and
+    aggregates carry `is_demo: true` plus a `source` field. Nothing here
+    represents real customers or live financial values.
+
+    **Out of scope by design.** Real deposits, withdrawals, investments, trading,
+    staking, crypto transfers, payment-provider integrations, KYC document
+    collection and email sending are not implemented. The 13 admin sections that
+    render generic placeholders in the supplied HTML have no endpoints.
+
+    Companion documents: `docs/API_CONTRACT.md` (field-level reference),
+    `docs/SETUP.md` (local + production configuration), `docs/SECURITY.md`,
+    `docs/TESTING.md`, `docs/DEPLOYMENT_HOSTINGER.md`.
+  contact:
+    name: ScalpSphere backend maintainers
+servers:
+  - url: http://localhost:4000/api/v1
+    description: Local development
+  - url: https://api.example.com/api/v1
+    description: Production (replace with your real API origin)
+
+tags:
+  - name: Health
+  - name: Authentication
+  - name: Dashboard
+  - name: Users
+  - name: Withdrawals
+  - name: Payment Methods
+  - name: Payment Settings
+  - name: Audit
+  - name: Customer Auth
+  - name: Customer
+
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Process health (public, unauthenticated)
+      security: []
+      responses:
+        '200':
+          description: Healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Degraded — the data layer is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Sign in as an administrator
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              default:
+                value:
+                  email: ops@example.com
+                  password: Str0ng!Passw0rd#2026
+      responses:
+        '200':
+          description: Authenticated. Sets the access, refresh and CSRF cookies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '401':
+          description: Incorrect email or password.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                invalid:
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_CREDENTIALS
+                      message: Incorrect email or password.
+                      request_id: 9f1c0b0e-4a5f-4d0e-9b1e-8f7c6d5b4a39
+        '422':
+          description: Validation failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '423':
+          description: Account temporarily locked after too many failed attempts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '429':
+          description: Rate limited.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Rotate the session and obtain a new access token
+      description: |
+        Reads the httpOnly `refresh_token` cookie, revokes it, and issues a new
+        one together with a new access token. Replaying an old refresh token
+        returns 401. Requires the `X-CSRF-Token` header when authenticated
+        via cookie.
+      responses:
+        '200':
+          description: New session issued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '401':
+          description: Missing, expired or revoked refresh token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Revoke the current session and clear cookies
+      responses:
+        '200':
+          description: Signed out.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      logged_out: { type: boolean }
+        '401':
+          description: No refresh token present.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /auth/logout-all:
+    post:
+      tags: [Authentication]
+      summary: Revoke every session for the current administrator
+      responses:
+        '200':
+          description: Sessions revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      revoked_sessions: { type: integer }
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Current authenticated principal
+      responses:
+        '200':
+          description: The principal.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/Admin' }
+        '401':
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /auth/csrf:
+    get:
+      tags: [Authentication]
+      summary: Issue a CSRF token cookie
+      security: []
+      description: |
+        Returns a CSRF token and sets it as a readable `csrf_token` cookie. The
+        client must echo the value in the `X-CSRF-Token` header on every unsafe
+        request that authenticates via cookie.
+      responses:
+        '200':
+          description: Token issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      csrf_token: { type: string }
+                      header: { type: string }
+
+  /auth/change-password:
+    post:
+      tags: [Authentication]
+      summary: Change the signed-in administrator's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '200':
+          description: Password changed; every refresh session revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      password_changed: { type: boolean }
+                      sessions_revoked: { type: boolean }
+        '400':
+          description: Current password is incorrect.
+        '422':
+          description: Password policy failure.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard summary (four admin cards + panels)
+      responses:
+        '200':
+          description: |
+            Reproduces the four stat cards of the supplied admin.html.
+            `total_users` and `pending_withdrawals` are computed live;
+            `total_deposits` and `active_investments` are demo aggregates and
+            are flagged `is_demo: true`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardSummary' }
+              examples:
+                default:
+                  value:
+                    generated_at: '2026-10-14T18:00:00.000Z'
+                    currency: USD
+                    card_order: [total_users, total_deposits, pending_withdrawals, active_investments]
+                    cards:
+                      total_users:
+                        key: total_users
+                        label: Total users
+                        icon: users
+                        value: 1284
+                        display_value: '1,284'
+                        unit: users
+                        source: users_table
+                        is_demo: false
+                        trend: { label: '+8.2% this month', direction: up, is_demo: false }
+                      total_deposits:
+                        key: total_deposits
+                        label: Total deposits
+                        value: 8429000
+                        display_value: $84,290.00
+                        unit: USD
+                        source: platform_metrics_daily
+                        is_demo: true
+                        trend: { label: Demo aggregate · deposits are out of scope, direction: flat, is_demo: true }
+                      pending_withdrawals:
+                        key: pending_withdrawals
+                        label: Pending withdrawals
+                        value: 124700
+                        display_value: $1,247.00
+                        unit: USD
+                        count: 3
+                        source: withdrawals_table
+                        is_demo: false
+                        trend: { label: 3 requests awaiting, direction: flat, is_demo: false }
+                      active_investments:
+                        key: active_investments
+                        label: Active investments
+                        value: 426
+                        display_value: '426'
+                        unit: investments
+                        source: platform_metrics_daily
+                        is_demo: true
+                        trend: { label: Demo aggregate · investments are out of scope, direction: flat, is_demo: true }
+                    recent_withdrawals: []
+                    recent_users: []
+                    activity:
+                      range: 7d
+                      days: 7
+                      is_demo: true
+                      points: []
+                      note: 'Aggregate deposit/withdrawal rollups are synthetic demo fixtures. This API does not implement deposits or withdrawals.'
+
+  /dashboard/activity:
+    get:
+      tags: [Dashboard]
+      summary: Platform activity series for the activity chart
+      parameters:
+        - name: range
+          in: query
+          description: Number of days.
+          schema:
+            type: string
+            enum: ['7d', '30d']
+            default: '7d'
+      responses:
+        '200':
+          description: Daily series with gaps filled at zero.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      range: { type: string }
+                      days: { type: integer }
+                      is_demo: { type: boolean }
+                      points:
+                        type: array
+                        items: { $ref: '#/components/schemas/ActivityPoint' }
+                      note: { type: string }
+        '422':
+          description: Unsupported range.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /dashboard/recent-users:
+    get:
+      tags: [Dashboard]
+      summary: Recently registered users
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10, default: 5 }
+      responses:
+        '200':
+          description: Array of users.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: Searchable, paginated users
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - name: search
+          in: query
+          description: Matches name, email or public reference (max 120 chars).
+          schema: { type: string, maxLength: 120 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, inactive] }
+        - name: kyc_status
+          in: query
+          schema: { type: string, enum: [pending, verified, rejected] }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [created_at, balance, name, id, status], default: created_at }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        '200':
+          description: Paginated users with facet counts.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedData'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+        '422':
+          description: Validation failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /users/recent:
+    get:
+      tags: [Users]
+      summary: Most recently registered users
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10, default: 5 }
+      responses:
+        '200':
+          description: Array of users.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+
+  /users/facets:
+    get:
+      tags: [Users]
+      summary: Filter counts for the users table
+      responses:
+        '200':
+          description: Counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      currency: { type: string }
+                      total: { type: integer }
+                      status:
+                        type: array
+                        items: { $ref: '#/components/schemas/Facet' }
+                      kyc_status:
+                        type: array
+                        items: { $ref: '#/components/schemas/Facet' }
+
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Users]
+      summary: Single user with recent withdrawals
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/User'
+                      - type: object
+                        properties:
+                          recent_withdrawals:
+                            type: array
+                            items: { $ref: '#/components/schemas/Withdrawal' }
+        '404':
+          description: No such user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /withdrawals:
+    get:
+      tags: [Withdrawals]
+      summary: Searchable, paginated withdrawal requests (read-only)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - name: search
+          in: query
+          description: Matches client name, email, method, receiver email, reference.
+          schema: { type: string, maxLength: 120 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, processed, failed, cancelled] }
+        - name: method
+          in: query
+          schema: { type: string, maxLength: 80 }
+        - name: from
+          in: query
+          description: ISO date or datetime.
+          schema: { type: string, example: '2026-10-01' }
+        - name: to
+          in: query
+          description: ISO date or datetime.
+          schema: { type: string, example: '2026-10-31' }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [created_at, amount, fee, status, id], default: created_at }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        '200':
+          description: Paginated withdrawals.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedData'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Withdrawal' }
+        '400':
+          description: Invalid date range.
+        '422':
+          description: Validation failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /withdrawals/facets:
+    get:
+      tags: [Withdrawals]
+      summary: Pending queue totals and available filters
+      responses:
+        '200':
+          description: Facets.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      currency: { type: string }
+                      pending:
+                        type: object
+                        properties:
+                          count: { type: integer }
+                          amount_minor: { type: integer, format: int64 }
+                          amount_display: { type: string }
+                      statuses: { type: array, items: { type: string } }
+                      methods: { type: array, items: { type: string } }
+
+  /withdrawals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Withdrawals]
+      summary: Single withdrawal request
+      responses:
+        '200':
+          description: The withdrawal.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/Withdrawal' }
+        '404':
+          description: No such withdrawal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /payment-methods:
+    get:
+      tags: [Payment Methods]
+      summary: List payment methods (display configuration only)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 120 }
+        - name: type
+          in: query
+          schema: { type: string, enum: [crypto, currency] }
+        - name: used_for
+          in: query
+          schema: { type: string, enum: [deposit, withdraw, both] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [enabled, disabled] }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [created_at, name, status, type, id], default: created_at }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        '200':
+          description: Paginated payment methods.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedData'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/PaymentMethod' }
+    post:
+      tags: [Payment Methods]
+      summary: Create a payment method
+      description: |
+        Requires the `owner` or `admin` role. These rows are display labels only;
+        this API holds no wallet addresses, card data or provider credentials.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentMethodCreate' }
+            examples:
+              default:
+                value: { name: Solana, type: crypto, used_for: both, status: disabled }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentMethod' }
+        '403':
+          description: Insufficient role, or CSRF token missing/invalid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: A method with this name already exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Validation failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /payment-methods/facets:
+    get:
+      tags: [Payment Methods]
+      summary: Filter counts for the payment-methods table
+      responses:
+        '200':
+          description: Counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      status:
+                        type: array
+                        items: { $ref: '#/components/schemas/Facet' }
+                      type:
+                        type: array
+                        items: { $ref: '#/components/schemas/Facet' }
+                      used_for:
+                        type: array
+                        items: { $ref: '#/components/schemas/Facet' }
+
+  /payment-methods/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Payment Methods]
+      summary: Single payment method
+      responses:
+        '200':
+          description: The method.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentMethod' }
+        '404':
+          description: No such method.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    patch:
+      tags: [Payment Methods]
+      summary: Update a payment method
+      description: Requires the `owner` or `admin` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentMethodUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentMethod' }
+        '403': { description: Insufficient role or CSRF failure. }
+        '404': { description: No such method. }
+        '409': { description: Name already in use. }
+        '422': { description: Validation failed. }
+    delete:
+      tags: [Payment Methods]
+      summary: Delete a payment method (hard delete)
+      description: Requires the `owner` or `admin` role.
+      responses:
+        '204': { description: Deleted. }
+        '403': { description: Insufficient role or CSRF failure. }
+        '404': { description: No such method. }
+
+  /payment-methods/{id}/enable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Payment Methods]
+      summary: Enable a payment method
+      description: Sets `status` to `enabled`. Idempotent. Requires `owner` or `admin`.
+      responses:
+        '200':
+          description: Enabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentMethod' }
+        '403': { description: Insufficient role or CSRF failure. }
+        '404': { description: No such method. }
+
+  /payment-methods/{id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Payment Methods]
+      summary: Disable a payment method
+      description: Sets `status` to `disabled`. Idempotent. Requires `owner` or `admin`.
+      responses:
+        '200':
+          description: Disabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentMethod' }
+        '403': { description: Insufficient role or CSRF failure. }
+        '404': { description: No such method. }
+
+  /payment-settings:
+    get:
+      tags: [Payment Settings]
+      summary: Read payment preferences
+      responses:
+        '200':
+          description: The singleton settings row (created lazily with the HTML defaults).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentSettings' }
+    put:
+      tags: [Payment Settings]
+      summary: Replace payment preferences
+      description: Requires the `owner` or `admin` role. All fields required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentSettingsPut' }
+            examples:
+              default:
+                value:
+                  default_currency: NGN
+                  processing_mode: manual_review
+                  payment_instructions: Demo instructions — replace before going live.
+                  minimum_deposit: '250.50'
+                  minimum_withdrawal: 1000
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentSettings' }
+        '403': { description: Insufficient role or CSRF failure. }
+        '422': { description: Validation failed. }
+    patch:
+      tags: [Payment Settings]
+      summary: Partially update payment preferences
+      description: Requires the `owner` or `admin` role. Omitted fields are unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaymentSettingsPut'
+                - description: every field optional
+              minProperties: 1
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/PaymentSettings' }
+        '403': { description: Insufficient role or CSRF failure. }
+        '422': { description: Validation failed. }
+
+  /payment-settings/currencies:
+    get:
+      tags: [Payment Settings]
+      summary: Allowed currency and processing-mode options
+      responses:
+        '200':
+          description: Option lists matching the HTML form.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      default_currency: { type: string, example: USD }
+                      currencies:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code: { type: string }
+                            label: { type: string }
+                      processing_modes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            key: { type: string }
+                            label: { type: string }
+
+  /audit-log:
+    get:
+      tags: [Audit]
+      summary: Administrative change trail
+      description: |
+        Requires the `owner` role. Entries never contain passwords, tokens or
+        other credentials — the audit service redacts a deny-list and refuses to
+        write anything else.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - name: action
+          in: query
+          schema: { type: string, maxLength: 80 }
+        - name: entity_type
+          in: query
+          schema: { type: string, maxLength: 60 }
+        - name: from
+          in: query
+          schema: { type: string, example: '2026-10-01' }
+        - name: to
+          in: query
+          schema: { type: string, example: '2026-10-31' }
+      responses:
+        '200':
+          description: Paginated audit entries.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedData'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/AuditEntry' }
+        '403': { description: Insufficient role. }
+
+  /customer/auth/login:
+    post:
+      tags: [Customer Auth]
+      summary: Customer sign-in (separate token domain from the admin API)
+      security: []
+      description: |
+        Returns a customer access token (audience `scalpsphere-customer`) and
+        sets `cust_access_token` / `cust_refresh_token` httpOnly cookies. A
+        customer token is rejected by every admin route and vice versa. There is
+        NO public registration: credentials are attached to an existing `users`
+        row by `npm run customer:credentials`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      customer:
+                        type: object
+                        properties:
+                          id: { type: string, example: USR-00001 }
+                          email: { type: string, format: email }
+                          full_name: { type: string }
+                      access_token: { type: string }
+                      token_type: { type: string, example: Bearer }
+                      expires_in: { type: integer }
+                      csrf_token: { type: string }
+                      session_expires_at: { type: string, format: date-time }
+        '401': { description: Unknown email or wrong password — identical response for both. }
+        '423': { description: Account locked after too many failed attempts. }
+        '429': { description: Rate limited (per IP + email, failed attempts only). }
+        '422': { description: Validation failed. }
+
+  /customer/auth/refresh:
+    post:
+      tags: [Customer Auth]
+      summary: Rotate the customer refresh session
+      responses:
+        '200': { description: New session issued; the old refresh token is revoked. }
+        '401': { description: Missing, expired or revoked refresh token. }
+
+  /customer/auth/logout:
+    post:
+      tags: [Customer Auth]
+      summary: Revoke the current customer session
+      responses:
+        '200': { description: Signed out. }
+
+  /customer/auth/session:
+    get:
+      tags: [Customer Auth]
+      summary: Current authenticated customer
+      responses:
+        '200':
+          description: The customer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerProfile' }
+        '401': { description: Unauthenticated. }
+
+  /customer/profile:
+    get:
+      tags: [Customer]
+      summary: Customer profile (rejects every query parameter)
+      responses:
+        '200':
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerProfile' }
+        '401': { description: Unauthenticated. }
+        '422': { description: Any query parameter is rejected, so ?user_id= cannot be smuggled in. }
+    patch:
+      tags: [Customer]
+      summary: Update the display name (the ONLY writable field)
+      description: |
+        Only `full_name` is writable. Balance, currency, status, kyc_status,
+        email and is_demo are admin-owned or financial and are rejected with
+        422. Identity comes from the token, never from a parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name]
+              additionalProperties: false
+              properties:
+                full_name: { type: string, minLength: 2, maxLength: 120 }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerProfile' }
+        '403': { description: CSRF token missing or invalid when cookie-authenticated. }
+        '422': { description: Validation failed, or a non-permitted field was supplied. }
+
+  /customer/dashboard/summary:
+    get:
+      tags: [Customer]
+      summary: Dashboard summary — real fields plus explicit unavailable blocks
+      description: |
+        `balance` is a read-only projection of `users.balance_minor`, the same
+        row the admin panel manages. Capabilities with no backing model
+        (performance, investments, staking, trading, mirror trading, deposit
+        history, transaction ledger) are returned in `unavailable` with a
+        reason — they are NEVER invented as numbers.
+      responses:
+        '200':
+          description: Summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerDashboardSummary' }
+
+  /customer/withdrawals:
+    get:
+      tags: [Customer]
+      summary: The caller's withdrawal history (read-only, ownership-scoped)
+      description: |
+        Same query parameters and row shape as the admin `GET /withdrawals`, but
+        the `userId` filter is applied inside the repository and cannot be
+        supplied or removed by the client. A customer with no history receives
+        `data: []` with `pagination.total: 0`.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, processed, failed, cancelled] }
+        - name: method
+          in: query
+          schema: { type: string, maxLength: 80 }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [created_at, amount, fee, status, id], default: created_at }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        '200':
+          description: Paginated withdrawals.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedData'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Withdrawal' }
+        '422': { description: Validation failed. }
+
+  /customer/withdrawals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Customer]
+      summary: One withdrawal, ownership-checked
+      description: 404 when the record does not exist OR belongs to another customer — indistinguishable by design.
+      responses:
+        '200':
+          description: The withdrawal.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/Withdrawal' }
+        '404': { description: Not found, or not owned by the caller. }
+
+  /customer/kyc:
+    get:
+      tags: [Customer]
+      summary: KYC status metadata only
+      description: No document upload, storage or retrieval exists anywhere in this API.
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      status: { type: string, enum: [pending, verified, rejected] }
+                      last_updated_at: { type: string, format: date-time, nullable: true }
+                      documents_on_file: { type: boolean, example: false }
+                      note: { type: string }
+
+  /customer/payment-methods:
+    get:
+      tags: [Customer]
+      summary: Enabled payment methods for the requested direction
+      description: |
+        The same `payment_methods` rows the admin panel edits — one source of
+        truth. The customer projection returns only `status: "enabled"` rows and
+        omits the admin-only `is_demo` field.
+      parameters:
+        - name: used_for
+          in: query
+          schema: { type: string, enum: [deposit, withdraw], default: deposit }
+      responses:
+        '200':
+          description: Methods.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, example: PAY-00001 }
+                        name: { type: string }
+                        type: { type: string, enum: [crypto, currency] }
+                        used_for: { type: string, enum: [deposit, withdraw, both] }
+                        status: { type: string, enum: [enabled] }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        `Authorization: Bearer <access-token>` returned by `/auth/login` or
+        `/auth/refresh`. Requests using this transport only are not required to
+        send a CSRF token, because they carry no ambient credential.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: |
+        httpOnly session cookie set by `/auth/login` and `/auth/refresh`. When
+        authenticating this way, every unsafe request must additionally send the
+        CSRF token in the `X-CSRF-Token` header, taken from the readable
+        `csrf_token` cookie (double-submit pattern).
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      description: Public reference, e.g. `USR-00001`, `WDR-00001`, `PAY-00001`.
+      schema: { type: string, minLength: 1, maxLength: 64 }
+    Page:
+      name: page
+      in: query
+      description: 1-based page number.
+      schema: { type: integer, minimum: 1, maximum: 1000000, default: 1 }
+    PerPage:
+      name: per_page
+      in: query
+      description: Page size.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:
+          type: object
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+            request_id: { type: string, format: uuid }
+
+    PaginationMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+        has_next: { type: boolean }
+        has_prev: { type: boolean }
+
+    Facet:
+      type: object
+      properties:
+        key: { type: string }
+        label: { type: string }
+        count: { type: integer, nullable: true }
+
+    PaginatedData:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: true
+        meta:
+          type: object
+          properties:
+            pagination: { $ref: '#/components/schemas/PaginationMeta' }
+            facets: { type: object }
+
+    HealthResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            status: { type: string, enum: [ok, degraded] }
+            checks:
+              type: object
+              properties:
+                database: { type: string, enum: [ok, unavailable] }
+                driver: { type: string, enum: [mysql, memory] }
+                durable: { type: boolean }
+            uptime_seconds: { type: integer }
+            api_version: { type: string, example: v1 }
+            demo_environment: { type: boolean }
+            authenticated_as:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string, format: uuid }
+                email: { type: string, format: email }
+                role: { type: string, enum: [owner, admin, support] }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 1, maxLength: 128 }
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      additionalProperties: false
+      properties:
+        current_password: { type: string, minLength: 1, maxLength: 128 }
+        new_password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          description: At least 12 characters, with upper, lower, number and symbol.
+
+    Admin:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role: { type: string, enum: [owner, admin, support] }
+        status: { type: string, enum: [active, disabled] }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    SessionResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            admin: { $ref: '#/components/schemas/Admin' }
+            access_token: { type: string }
+            token_type: { type: string, example: Bearer }
+            expires_in: { type: integer, description: 'Access-token lifetime in seconds.' }
+            csrf_token: { type: string }
+            session_expires_at: { type: string, format: date-time }
+
+    ActivityPoint:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        deposits_minor: { type: integer, format: int64 }
+        withdrawals_minor: { type: integer, format: int64 }
+        is_demo: { type: boolean }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, example: USR-00001, description: Public reference used in URLs. }
+        name: { type: string }
+        email: { type: string, format: email }
+        balance_minor: { type: integer, format: int64 }
+        balance_display: { type: string, example: $450.00 }
+        currency: { type: string, example: USD }
+        status: { type: string, enum: [active, inactive] }
+        kyc_status: { type: string, enum: [pending, verified, rejected] }
+        is_demo: { type: boolean, description: 'True for rows created by the demo seed command.' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    Withdrawal:
+      type: object
+      properties:
+        id: { type: string, example: WDR-00001 }
+        user_ref: { type: string, example: USR-00001, nullable: true }
+        client_name: { type: string }
+        amount_minor: { type: integer, format: int64 }
+        amount_display: { type: string, example: $537.00 }
+        fee_minor: { type: integer, format: int64 }
+        fee_display: { type: string, example: $537.00 }
+        net_minor: { type: integer, format: int64 }
+        net_display: { type: string, example: $0.00 }
+        payment_method: { type: string }
+        receiver_email: { type: string, format: email }
+        status: { type: string, enum: [pending, processed, failed, cancelled] }
+        is_demo: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    PaymentMethod:
+      type: object
+      properties:
+        id: { type: string, example: PAY-00001 }
+        name: { type: string }
+        type: { type: string, enum: [crypto, currency] }
+        used_for: { type: string, enum: [deposit, withdraw, both] }
+        status: { type: string, enum: [enabled, disabled] }
+        is_demo: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    PaymentMethodCreate:
+      type: object
+      required: [name, type, used_for]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        type: { type: string, enum: [crypto, currency] }
+        used_for: { type: string, enum: [deposit, withdraw, both] }
+        status: { type: string, enum: [enabled, disabled], default: disabled }
+
+    PaymentMethodUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        type: { type: string, enum: [crypto, currency] }
+        used_for: { type: string, enum: [deposit, withdraw, both] }
+        status: { type: string, enum: [enabled, disabled] }
+
+    PaymentSettings:
+      type: object
+      properties:
+        default_currency: { type: string, enum: [USD, EUR, NGN] }
+        processing_mode: { type: string, enum: [automatic, manual_review] }
+        payment_instructions: { type: string, nullable: true }
+        minimum_deposit_minor: { type: integer, format: int64 }
+        minimum_deposit_display: { type: string, example: $10.00 }
+        minimum_withdrawal_minor: { type: integer, format: int64 }
+        minimum_withdrawal_display: { type: string, example: $10.00 }
+        updated_by: { type: string, format: uuid, nullable: true }
+        updated_by_email: { type: string, format: email, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    PaymentSettingsPut:
+      type: object
+      required: [default_currency, processing_mode, minimum_deposit, minimum_withdrawal]
+      properties:
+        default_currency: { type: string, enum: [USD, EUR, NGN] }
+        processing_mode: { type: string, enum: [automatic, manual_review] }
+        payment_instructions: { type: string, maxLength: 2000 }
+        minimum_deposit:
+          description: Decimal amount in the given currency; converted to minor units server-side.
+          oneOf:
+            - type: string
+              pattern: '^\d+(\.\d{1,2})?$'
+            - type: number
+              minimum: 0
+        minimum_withdrawal:
+          description: Decimal amount in the given currency; converted to minor units server-side.
+          oneOf:
+            - type: string
+              pattern: '^\d+(\.\d{1,2})?$'
+            - type: number
+              minimum: 0
+
+    AuditEntry:
+      type: object
+      properties:
+        id: { type: string }
+        action: { type: string, example: payment_method.created }
+        entity_type: { type: string, example: payment_method }
+        entity_id: { type: string, example: PAY-00001 }
+        summary: { type: string }
+        actor:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string, format: email }
+        before: { type: object, nullable: true }
+        after: { type: object, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    CustomerProfile:
+      type: object
+      properties:
+        id: { type: string, example: USR-00001, description: Same public reference the admin panel displays. }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        kyc_status: { type: string, enum: [pending, verified, rejected] }
+        member_since: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    CustomerDashboardSummary:
+      type: object
+      properties:
+        generated_at: { type: string, format: date-time }
+        currency: { type: string }
+        account:
+          type: object
+          properties:
+            id: { type: string }
+            full_name: { type: string }
+            email: { type: string, format: email }
+            kyc_status: { type: string }
+            member_since: { type: string, format: date-time }
+        balance:
+          type: object
+          description: Read-only projection of users.balance_minor. Never accepted from or computed by the client.
+          properties:
+            minor: { type: integer, format: int64 }
+            display: { type: string, example: $450.00 }
+            currency: { type: string }
+            source: { type: string, example: users.balance_minor }
+            read_only: { type: boolean, example: true }
+        withdrawals:
+          type: object
+          properties:
+            total: { type: integer }
+            pending_count: { type: integer }
+            pending_minor: { type: integer, format: int64 }
+            source: { type: string, example: withdrawals }
+        recent_withdrawals:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              amount_minor: { type: integer, format: int64 }
+              amount_display: { type: string }
+              payment_method: { type: string }
+              status: { type: string }
+              created_at: { type: string, format: date-time }
+        unavailable:
+          type: array
+          description: >
+            Capabilities with no backing model, each with a reason. They are
+            NEVER invented as numbers. A client must treat them as "not present
+            in this release", not as zero.
+          items:
+            type: object
+            properties:
+              feature: { type: string, example: staking }
+              reason: { type: string }
