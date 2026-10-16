@@ -25,6 +25,14 @@ import { verifyCustomerAccessToken } from '../lib/tokens.js';
 export const CUST_ACCESS_COOKIE_NAME = 'cust_access_token';
 export const CUST_REFRESH_COOKIE_NAME = 'cust_refresh_token';
 
+/**
+ * Web-session cookie for the FORM-COMPATIBLE flow (POST /login). The live
+ * product posts a classic HTML form with redirects rather than a JSON API, so
+ * this flow sets a single httpOnly cookie carrying the same signed customer
+ * access token. authenticateCustomer accepts it alongside the API cookie.
+ */
+export const WEB_SESSION_COOKIE = 'web_session';
+
 function bearerFrom(req) {
   const header = req.headers.authorization;
   if (typeof header !== 'string') return null;
@@ -42,7 +50,12 @@ function bearerFrom(req) {
 export function authenticateCustomer({ repos }) {
   return async function authenticateCustomerMiddleware(req, _res, next) {
     try {
-      const token = bearerFrom(req) ?? req.cookies?.[CUST_ACCESS_COOKIE_NAME];
+      // Three transports: bearer header, the JSON-API cookie, and the
+      // form-compatible web-session cookie set by POST /login (the
+      // Laravel-style flow). All resolve to the same signed customer token.
+      const token = bearerFrom(req)
+        ?? req.cookies?.[CUST_ACCESS_COOKIE_NAME]
+        ?? req.cookies?.[WEB_SESSION_COOKIE];
 
       if (!token) {
         throw unauthorized('Missing authentication credentials.');

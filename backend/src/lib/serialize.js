@@ -39,6 +39,7 @@ export function serializeUser(row, currency = 'USD') {
   return {
     id: row.public_ref,
     name: row.full_name,
+    username: row.username ?? null,
     email: row.email,
     balance_minor: Number(row.balance_minor),
     balance_display: formatMinor(Number(row.balance_minor), currencyOrDefault(currency)),

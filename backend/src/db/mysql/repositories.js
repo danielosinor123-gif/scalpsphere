@@ -241,7 +241,7 @@ export function createMysqlRepositories(pool) {
   // -----------------------------------------------------------------------
   // users
   // -----------------------------------------------------------------------
-  const USER_COLUMNS = `u.id, u.public_ref, u.full_name, u.email, u.balance_minor, u.currency,
+  const USER_COLUMNS = `u.id, u.public_ref, u.full_name, u.email, u.username, u.balance_minor, u.currency,
                         u.status, u.kyc_status, u.is_demo, u.created_at, u.updated_at`;
 
   const userRepo = {
@@ -250,6 +250,7 @@ export function createMysqlRepositories(pool) {
         id,
         fullName,
         email,
+        username = null,
         balanceMinor = 0,
         currency = 'USD',
         status = 'active',
@@ -262,9 +263,9 @@ export function createMysqlRepositories(pool) {
         const publicRef = `USR-${String(await allocateRef(c, 'USR')).padStart(5, '0')}`;
 
         const sql = `INSERT INTO users
-                       (id, public_ref, full_name, email, balance_minor, currency,
+                       (id, public_ref, full_name, email, username, balance_minor, currency,
                         status, kyc_status, is_demo)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         try {
           await c.query(
             sql,
@@ -273,6 +274,7 @@ export function createMysqlRepositories(pool) {
               publicRef,
               fullName,
               String(email).toLowerCase(),
+              username ? String(username).toLowerCase() : null,
               Math.trunc(Number(balanceMinor)),
               currency,
               status,
@@ -281,7 +283,10 @@ export function createMysqlRepositories(pool) {
             ],
           );
         } catch (err) {
-          tagError(err, 'A user with this email already exists.', 'Could not create user.');
+          const msg = /uq_users_username/.test(String(err.message))
+            ? 'That username is already taken.'
+            : 'A user with this email already exists.';
+          tagError(err, msg, 'Could not create user.');
         }
         return userRepo.findById(id, c);
       });
@@ -302,6 +307,23 @@ export function createMysqlRepositories(pool) {
       const [rows] = await query(
         `SELECT ${USER_COLUMNS} FROM users u WHERE u.email = ? LIMIT 1`,
         [String(email).toLowerCase()],
+        conn,
+      );
+      return rows[0] ?? null;
+    },
+
+    /**
+     * MySQL driver counterpart of the memory driver's findByUsername — the
+     * form-compatible registration endpoint calls this before creating an
+     * account. It was missing here while present in the offline driver, so the
+     * MySQL run threw "findByUsername is not a function" and — because the
+     * route handler was not wrapped in asyncHandler — the request hung for the
+     * fetch timeout instead of erroring. Both fixed.
+     */
+    async findByUsername(username, conn) {
+      const [rows] = await query(
+        `SELECT ${USER_COLUMNS} FROM users u WHERE u.username = ? LIMIT 1`,
+        [String(username).toLowerCase()],
         conn,
       );
       return rows[0] ?? null;

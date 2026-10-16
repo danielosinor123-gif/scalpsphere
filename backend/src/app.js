@@ -34,6 +34,7 @@ import { createSettingsModule } from './modules/settings/settings.routes.js';
 import { createAuditModule } from './modules/audit/audit.routes.js';
 import { createAuditService } from './modules/audit/audit.service.js';
 import { createCustomerModule } from './modules/customer/customer.routes.js';
+import { createWebAuthModule } from './modules/customer/webauth.routes.js';
 import { forbidden } from './lib/ApiError.js';
 
 const UNSAFE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -97,6 +98,16 @@ export function createApp({ db }) {
   const repos = db.repositories;
   const audit = createAuditService(repos);
   const requireAdminRole = requireRole;
+
+  // --- FORM-COMPATIBLE customer auth (the stakeclone.com/login contract) ----
+  // Lives at the ROOT because the live product's forms POST to /login and
+  // /register, not to /api/v1/… . Same repositories, same token domain and the
+  // same double-submit CSRF scheme (cookie + `_token` field) as the rest of
+  // the app. Rate-limited by the same per-IP+email login limiter.
+  const web = express.Router();
+  web.use(['/login', '/register'], loginRateLimiter);
+  createWebAuthModule({ repos })(web);
+  app.use('/', web);
 
   // --- Routes ---------------------------------------------------------------
   const api = express.Router();

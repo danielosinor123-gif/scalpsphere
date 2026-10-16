@@ -73,7 +73,7 @@ export function createMemoryRepositories(store = createMemoryStore()) {
 
   const uniques = {
     admins: [['email']],
-    users: [['email'], ['public_ref']],
+    users: [['email'], ['public_ref'], ['username']],
     withdrawals: [['public_ref']],
     payment_methods: [['name'], ['public_ref']],
   };
@@ -81,7 +81,11 @@ export function createMemoryRepositories(store = createMemoryStore()) {
   function assertUniques(name, row, ignoreId) {
     for (const cols of uniques[name] || []) {
       for (const col of cols) {
-        if (row[col] === undefined) continue;
+        // MySQL semantics: a UNIQUE index ignores NULLs entirely, so multiple
+        // rows may hold NULL. Without this, adding the nullable `username`
+        // column made every demo user collide on NULL in the offline driver —
+        // caught by the full suite going red, not by the new tests alone.
+        if (row[col] === undefined || row[col] === null) continue;
         // MySQL's utf8mb4_0900_ai_ci collation is case-insensitive.
         const target = String(row[col]).toLowerCase();
         store.assertUnique(
@@ -297,13 +301,14 @@ function applySearch(rows, term, fields) {
   };
 
   const userRepo = {
-    create({ id, fullName, email, balanceMinor = 0, currency = 'USD', status = 'active', kycStatus = 'pending', isDemo = 1 }, tx) {
+    create({ id, fullName, email, username = null, balanceMinor = 0, currency = 'USD', status = 'active', kycStatus = 'pending', isDemo = 1 }, tx) {
       const publicRef = allocateRef('USR');
       const row = {
         id,
         public_ref: publicRef,
         full_name: fullName,
         email: String(email).toLowerCase(),
+        username: username ? String(username).toLowerCase() : null,
         balance_minor: Number(balanceMinor),
         currency,
         status,
@@ -314,6 +319,10 @@ function applySearch(rows, term, fields) {
       };
       assertUniques('users', row, null);
       return insertRow('users', row, tx);
+    },
+    findByUsername(username) {
+      const needle = String(username).toLowerCase();
+      return clone(table('users').find((u) => u.username === needle) ?? null);
     },
     findById(id) {
       return clone(
