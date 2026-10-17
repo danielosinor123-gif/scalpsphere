@@ -655,6 +655,21 @@ section('J. ROLE GATE (throwaway support account)');
   } catch (err) {
     expectTrue('CLI revokes all support sessions', false, err.message);
   }
+
+  // RESTORE the original password. The change-password test above rotated it
+  // permanently, and leaving it rotated broke every later run of
+  // frontend/verify.mjs — which signs in as this same account with the
+  // original password. A sweep must leave the system as it found it.
+  const restoreScript = fileURLToPath(new URL('./set-admin-password.js', import.meta.url));
+  try {
+    execFileSync(process.execPath, [restoreScript, '--email', SUPPORT_EMAIL], {
+      env: { ...process.env, ADMIN_PASSWORD: SUPPORT_PASSWORD },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    expectTrue('sweep restores the support password it rotated', true);
+  } catch (err) {
+    expectTrue('sweep restores the support password it rotated', false, err.message);
+  }
 }
 
 // --- K. Health while authenticated ----------------------------------------
