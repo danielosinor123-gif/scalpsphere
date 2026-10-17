@@ -1,4 +1,4 @@
-# StakeClone
+# ScalpSphere
 
 A two-part project: a **Node.js + Express + MySQL admin backend** and a
 **zero-dependency admin frontend**, sharing one database and one source of

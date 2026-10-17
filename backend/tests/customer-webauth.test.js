@@ -1,5 +1,7 @@
 /**
- * FORM-COMPATIBLE customer auth — the contract used by stakeclone.com's own
+ * FORM-COMPATIBLE customer auth — the contract used by the reference product's
+ * own login and registration pages (stakeclone.com, recreated as a guide and
+ * NOT copied):
  * login and registration pages:
  *
  *   POST /login    application/x-www-form-urlencoded  _token, email, password, remember

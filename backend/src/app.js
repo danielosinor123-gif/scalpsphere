@@ -99,7 +99,7 @@ export function createApp({ db }) {
   const audit = createAuditService(repos);
   const requireAdminRole = requireRole;
 
-  // --- FORM-COMPATIBLE customer auth (the stakeclone.com/login contract) ----
+  // --- FORM-COMPATIBLE customer auth (the live product's login contract) ----
   // Lives at the ROOT because the live product's forms POST to /login and
   // /register, not to /api/v1/… . Same repositories, same token domain and the
   // same double-submit CSRF scheme (cookie + `_token` field) as the rest of

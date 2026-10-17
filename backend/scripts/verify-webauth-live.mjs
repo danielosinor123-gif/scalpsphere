@@ -1,7 +1,8 @@
 /**
  * Live end-to-end check of the FORM-COMPATIBLE flow against the running dev
  * server (real MariaDB, scalpsphere schema) — the exact contract used by
- * stakeclone.com's own login and registration pages.
+ * the reference product's own login and registration pages (stakeclone.com,
+ * recreated as a guide — not copied).
  */
 const BASE = 'http://127.0.0.1:4000';
 const jar = new Map();
